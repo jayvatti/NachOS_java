@@ -1,9 +1,7 @@
 //class Database
-//This class implements the synchronization methods to be used in 
+//This class implements the synchronization methods to be used in
 //the readers writers problem
 public class Database
-
-   //READERS are given PRIORITY -> NEED TO PRIORITIZE WRITERS!! 
 {
    //MP2 create any variables that you need for implementation of the methods
    //of this class
@@ -11,17 +9,34 @@ public class Database
    //Database
    //Initializes Database variables
 
-   Semaphore mutex, wrt, wMutex;
-   int reader_count = 0;
-   int writer_count = 0;
+   // number of readers actively reading
+   int activeReaders = 0;
+
+   //count for blockedReaders and waitingWriters
+   private int blockedReaders = 0;
+   private int waitingWriters = 0;
+
+   /*
+   SEMAPHORES:
+   - databaseAccess -> semaphore to access the Database
+   - readerCountMutex -> semaphore for readerCount
+   - writerCountMutex -> semaphore for writerCount
+   - blockedReadersSemaphore -> semaphore for blocked readers waiting for writers to finish
+    */
+   private final Semaphore databaseAccess;
+   private final Semaphore readerCountMutex, writerCountMutex, blockedReadersSemaphore;
+
+
 
    public Database()
    {
       //MP2
-      mutex = new Semaphore("mutex",1);
-      wrt = new Semaphore("writer_semaphore",1);
-   }
+      databaseAccess = new Semaphore("database_access", 1);
+      readerCountMutex = new Semaphore("reader_count_mutex", 1);
+      writerCountMutex = new Semaphore("writer_count_mutex", 1);
+      blockedReadersSemaphore = new Semaphore("blocked_readers_semaphore", 0); //0 -> since no reader is initially waiting
 
+   }
    //napping()
    //this is called when a reader or writer wants to go to sleep and when
    //a reader or writer is doing its work.
@@ -39,12 +54,28 @@ public class Database
    public int startRead()
    {
       //MP2
-      mutex.P();
-      reader_count++;
-      int returnVal = reader_count;
-      if(reader_count == 1) wrt.P();
-      mutex.V();
-      return returnVal;
+      //checking if writers are waiting
+      writerCountMutex.P();
+      int currentWaitingWriters = waitingWriters;
+      writerCountMutex.V();
+
+      //if writers are waiting -> blocking incoming readers
+      if (currentWaitingWriters > 0) {
+         blockedReaders++;
+         blockedReadersSemaphore.P();
+      }
+
+      //incrementing active reader count
+      readerCountMutex.P();
+      activeReaders++;
+      int currentReaders = activeReaders;
+
+      //if this is the first readers -> acquiring the database semaphore
+      if (activeReaders == 1) databaseAccess.P();
+
+      readerCountMutex.V();
+
+      return currentReaders;
    }
 
    //endRead()
@@ -54,13 +85,18 @@ public class Database
    public int endRead()
    {
       //MP2
-      mutex.P();
-      reader_count--;
-      int returnVal = reader_count;
-      if(reader_count == 0) wrt.V();
-      mutex.V();
+      //decrementing active reader count
+      readerCountMutex.P();
+      activeReaders--;
+      int currentReaders = activeReaders;
 
-      return returnVal;
+      //if this is the last active reader -> releasing the database semaphore
+      if (activeReaders == 0) databaseAccess.V();
+
+      readerCountMutex.V();
+
+      return currentReaders;
+
    }
 
    //startWrite()
@@ -70,7 +106,27 @@ public class Database
    public void startWrite()
    {
       //MP2
-      wrt.P();
+
+      //incrementing waiting writer count
+      writerCountMutex.P();
+      waitingWriters++;
+      writerCountMutex.V();
+
+      //acquiring exclusive access to the database
+      databaseAccess.P();
+
+      //decrementing waiting writer count
+      writerCountMutex.P();
+      waitingWriters--;
+
+      //if no writers are waiting -> releasing all blocked readers
+      if (waitingWriters == 0) {
+         while (blockedReaders > 0) {
+            blockedReadersSemaphore.V();
+            blockedReaders--;
+         }
+      }
+      writerCountMutex.V();
 
    }
 
@@ -80,6 +136,7 @@ public class Database
    public void endWrite()
    {
       //MP2
-      wrt.V();
+      //releasing access to the database
+      databaseAccess.V();
    }
 }
