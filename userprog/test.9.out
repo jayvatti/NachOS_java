@@ -1,0 +1,31 @@
+Forking thread: main
+	interrupts: off -> off
+Putting thread on ready list: main
+	interrupts: off -> off
+Scheduling first Nachos thread
+Switching to thread: main
+
+Starting memmanager with  10 pagebuffers, Enhanced second chance
+
+in = 0, in = 1, in = 88, in = 2, 
+
+OUTPUT FOR TESTCASE 0
+
+
+PHYSICAL MEMORY DUMP:
+F = Frame Number
+V = Virtual Page Number
+B = In Page Buffer
+F	 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 
+V	 0  1 88  2  E  E  E  E  E  E  E  E  E  E  E  E  E  E  E  E 
+B	 N  N  N  N  N  N  N  N  N  N  Y  Y  Y  Y  Y  Y  Y  Y  Y  Y 
+
+
+SWAP FILE DUMP:
+Format is [<swap frame>/<virtual page number>]
+
+
+Total free pages: 4102
+MemoryManager dump complete.
+in = 3, in = 7, in = 39, in = 8, in = 40, in = 9, 
+in = 41, 

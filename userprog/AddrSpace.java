@@ -20,10 +20,16 @@ import java.io.*;
 
 class AddrSpace {
 
-  static final int UserStackSize = 1024; // increase this as necessary!
+  static final long UserStackSize = 2048;// increase this as necessary!
+  private long BeginCodePage, EndCodeAddr, EndCodePage,
+	   BeginInitDataPage, EndInitDataAddr, EndInitDataPage,
+	   BeginUninitDataPage, EndUninitDataAddr, EndUninitDataPage,
+	   BeginStackPage, EndStackAddr, EndStackPage;
 
-  TranslationEntry pageTable[];
-  int numPages;
+  private NoffHeader noffH;
+  TranslationEntry[] pageTable;
+  RandomAccessFile executable;
+  long numPages;
 
   //----------------------------------------------------------------------
   // 	Create an address space to run a user program.
@@ -41,8 +47,7 @@ class AddrSpace {
   //----------------------------------------------------------------------
 
   public AddrSpace(RandomAccessFile executable) throws IOException {
-
-    NoffHeader noffH;
+    this.executable = executable;
     long size;
     
     noffH = new NoffHeader(executable);
@@ -55,6 +60,33 @@ class AddrSpace {
     if (size % Machine.PageSize > 0) numPages++;
 
     size = numPages * Machine.PageSize;
+    
+    BeginCodePage = noffH.code.virtualAddr/Machine.PageSize;
+    EndCodeAddr = noffH.code.size + noffH.code.virtualAddr;
+    EndCodePage = EndCodeAddr/Machine.PageSize;
+    BeginInitDataPage = noffH.initData.virtualAddr/Machine.PageSize;
+    EndInitDataAddr = noffH.initData.virtualAddr + noffH.initData.size;
+    EndInitDataPage = EndInitDataAddr/Machine.PageSize;
+    BeginUninitDataPage = noffH.uninitData.virtualAddr/Machine.PageSize;
+    EndUninitDataAddr = noffH.uninitData.virtualAddr + noffH.uninitData.size;
+    EndUninitDataPage = EndUninitDataAddr/Machine.PageSize;
+
+    if (EndCodePage > EndInitDataPage)
+      numPages = (EndCodePage > EndUninitDataPage) ?
+                          EndCodePage : EndUninitDataPage;
+    else
+      numPages = (EndInitDataPage > EndUninitDataPage) ?
+                          EndInitDataPage : EndUninitDataPage;
+
+
+    // Allocate space for stack segment
+    BeginStackPage = ++numPages;
+    EndStackPage = BeginStackPage + UserStackSize/Machine.PageSize;
+
+    numPages = EndStackPage + 1;
+
+
+/*  marked for mp3 , to allow virtual memory 
 
     Debug.ASSERT((numPages <= Machine.NumPhysPages),// check we're not trying
 		 "AddrSpace constructor: Not enough memory!");
@@ -62,48 +94,69 @@ class AddrSpace {
 						// at least until we have
 						// virtual memory
 
+*/
     Debug.println('a', "Initializing address space, numPages=" 
 		+ numPages + ", size=" + size);
 
     // first, set up the translation 
-    pageTable = new TranslationEntry[numPages];
+    pageTable = new TranslationEntry[(int)numPages];
     for (int i = 0; i < numPages; i++) {
       pageTable[i] = new TranslationEntry();
-      pageTable[i].virtualPage = i; // for now, virtual page# = phys page#
-      pageTable[i].physicalPage = i;
-      pageTable[i].valid = true;
-      pageTable[i].use = false;
-      pageTable[i].dirty = false;
-      pageTable[i].readOnly = false;  // if the code segment was entirely on 
-					// a separate page, we could set its 
-					// pages to be read-only
-    }
-    
-    // zero out the entire address space, to zero the unitialized data 
-    // segment and the stack segment
-    // ????? bzero(machine->mainMemory, size);
-
-    // then, copy in the code and data segments into memory
-    if (noffH.code.size > 0) {
-      Debug.println('a', "Initializing code segment, at " +
-	    noffH.code.virtualAddr + ", size " +
-	    noffH.code.size);
-
-      executable.seek(noffH.code.inFileAddr);
-      executable.read(Machine.mainMemory, (int)noffH.code.virtualAddr, 
-		      (int)noffH.code.size);
     }
 
-    if (noffH.initData.size > 0) {
-      Debug.println('a', "Initializing data segment, at " +
-	    noffH.initData.virtualAddr + ", size " +
-	    noffH.initData.size);
-
-      executable.seek(noffH.initData.inFileAddr);
-      executable.read(Machine.mainMemory, (int)noffH.initData.virtualAddr, 
-		      (int)noffH.initData.size);
+    // Init the page table
+    int i;
+    for (i = (int)BeginInitDataPage; i <= EndInitDataPage; i++)
+    {
+      pageTable[i].virtualPage = i;
+      pageTable[i].valid = false;
+      pageTable[i].legal = true;
+      pageTable[i].readOnly = false;
     }
-    
+
+    for (i = (int)BeginUninitDataPage; i <= EndUninitDataPage; i++)
+    {
+      pageTable[i].virtualPage = i;
+      pageTable[i].valid = false;
+      pageTable[i].legal = true;
+      pageTable[i].readOnly = false;
+    }
+
+    for (i = (int)BeginCodePage; i <= EndCodePage; i++)
+    {
+      pageTable[i].virtualPage = i;
+      pageTable[i].valid = false;
+      pageTable[i].legal = true;
+      pageTable[i].readOnly = false;
+    }
+
+    for (i = (int)BeginStackPage; i <= EndStackPage; i++)
+    {
+      pageTable[i].virtualPage = i;
+      pageTable[i].valid = false;
+      pageTable[i].legal = true;
+      pageTable[i].readOnly = false;
+    }
+
+
+    if (BeginCodePage == EndInitDataPage || BeginCodePage == EndUninitDataPage)
+      pageTable[(int)BeginCodePage].readOnly = false;
+    if (EndCodePage == BeginInitDataPage || EndCodePage == BeginUninitDataPage)
+      pageTable[(int)EndCodePage].readOnly = false;
+
+    // References to other pages are all invalid
+    for (i = 0; i < numPages; i++)
+      if (!(i >= BeginCodePage && i <= EndCodePage) &&
+          !(i >= BeginInitDataPage && i <= EndInitDataPage) &&
+          !(i >= BeginUninitDataPage && i <= EndUninitDataPage)&&
+          !(i >= BeginStackPage && i <= EndStackPage)
+         )
+      {
+        pageTable[i].virtualPage = i;
+        pageTable[i].valid = false;
+        pageTable[i].legal = false;
+        pageTable[i].readOnly = false;
+      }
   }
 
 
@@ -113,7 +166,7 @@ class AddrSpace {
   //
   // 	We write these directly into the "machine" registers, so
   //	that we can immediately jump to user code.  Note that these
-  //	will be saved/restored into the currentThread->userRegisters
+  //	will be saved/restored into the currentThread.userRegisters
   //	when this thread is context switched out.
   //----------------------------------------------------------------------
 
@@ -134,7 +187,7 @@ class AddrSpace {
    // allocated the stack; but subtract off a bit, to make sure we don't
    // accidentally reference off the end!
     Machine.writeRegister(Machine.StackReg, 
-			  numPages * Machine.PageSize - 16);
+			  (int)numPages * Machine.PageSize - 16);
     Debug.println('a', "Initializing stack register to " +
 		(numPages * Machine.PageSize - 16));
   }
@@ -159,7 +212,89 @@ class AddrSpace {
 
   void restoreState() {
     Machine.pageTable = pageTable;
-    Machine.pageTableSize = numPages;
+    Machine.pageTableSize = (int)numPages;
   }
+
+void readSourcePage(byte[] buffer, int virtualPage)
+{
+  long virtualAddr = virtualPage*Machine.PageSize;
+  long displacement, numBytes, seek, startAddr;
+
+  if ((virtualPage > BeginStackPage && virtualPage < EndStackPage) ||
+      (virtualPage > BeginUninitDataPage && virtualPage < EndUninitDataPage)) 
+  {
+    return;
+  }
+
+  try{
+
+  if (virtualPage > BeginCodePage && virtualPage < EndCodePage)
+  {
+    seek = noffH.code.inFileAddr + virtualAddr - noffH.code.virtualAddr;
+    //executable.readAt(buffer, 0, Machine.PageSize, seek);
+    executable.seek(seek);
+    executable.read(buffer, 0, Machine.PageSize);
+    return;
+  }
+ if (virtualPage > BeginInitDataPage && virtualPage < EndInitDataPage)
+  {
+    seek = noffH.initData.inFileAddr + virtualAddr - noffH.initData.virtualAddr;
+    //executable.readAt(buffer, 0, Machine.PageSize, seek);
+    executable.seek(seek);
+    executable.read(buffer, 0,(int)Machine.PageSize);
+    return;
+  }
+
+
+  if (virtualPage == BeginCodePage)
+  {
+    displacement = noffH.code.virtualAddr%Machine.PageSize;
+    if (EndCodePage > BeginCodePage)
+      numBytes = Machine.PageSize - displacement;
+    else
+      numBytes = noffH.code.size;
+    seek = noffH.code.inFileAddr;
+    //executable.readAt(buffer, displacement, numBytes, seek);
+    executable.seek(seek);
+    executable.read(buffer, (int)displacement, (int)numBytes);
+  }
+  else if (virtualPage == EndCodePage)
+  {
+    displacement = 0;
+    numBytes = EndCodeAddr%Machine.PageSize + 1;
+    seek = noffH.code.inFileAddr + virtualAddr - noffH.code.virtualAddr;
+    executable.seek(seek);
+    executable.read(buffer, (int)displacement, (int)numBytes);
+  }
+
+
+  if (virtualPage == BeginInitDataPage)
+  {
+    displacement = noffH.initData.virtualAddr%Machine.PageSize;
+    if (EndInitDataPage > BeginInitDataPage)
+      numBytes = Machine.PageSize - displacement;
+    else
+      numBytes = noffH.initData.size;
+    seek = noffH.initData.inFileAddr;
+    //executable.readAt(buffer, displacement, numBytes, seek);
+    executable.seek(seek); 
+    executable.read(buffer, (int)displacement, (int)numBytes);
+  }
+ else if (virtualPage == EndInitDataPage)
+  {
+    displacement = 0;
+    numBytes = EndInitDataAddr%Machine.PageSize + 1;
+    seek = noffH.initData.inFileAddr + virtualAddr - noffH.initData.virtualAddr;
+    //executable.readAt(buffer, displacement, numBytes, seek);
+    executable.seek(seek);
+    executable.read(buffer, (int)displacement, (int)numBytes);
+  }
+  }catch(IOException e){
+	System.out.println("Exception in access excutable.");
+  }
+
+  return;
+}
+
 
 }
